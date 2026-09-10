@@ -1,32 +1,40 @@
 # Linux Monitoring
 
-A lightweight Linux desktop inspector for quickly understanding what a system is doing: CPU, memory, disks, network, processes, sockets, services, logs, and basic security posture.
+A lightweight, local-first Linux desktop inspector for quickly understanding what a system is doing: CPU, memory, disks, network, processes, sockets, services, logs, and basic security posture.
 
-The project is local-first and read-only by default. It reads standard Linux interfaces such as `/proc`, uses `psutil`, and calls common system tools such as `systemctl`, `journalctl`, `ss`, and `sensors` when available.
+The project is read-only by default. It reads standard Linux interfaces such as `/proc`, uses `psutil`, and calls common system tools such as `systemctl`, `journalctl`, `ss`, and `sensors` when available.
 
-## Current MVP
+## Current version: 0.2.0
+
+The main addition in 0.2.0 is the **cross-linked Investigation workspace**. Instead of checking processes, sockets, files, services, and logs separately, you can pivot from one process and inspect the related evidence together.
+
+### What it can do
 
 - Overview dashboard with CPU, memory, swap, disk, network, uptime, OS, kernel, and load averages
 - Per-core CPU usage
-- Process table with PID, user, CPU, RAM, state, command and a detailed process view
-- Network interface counters and active socket view
+- Process table with PID, PPID, user, CPU, RAM, state, command line
+- **Process investigation workspace**
+  - process identity, executable, CWD, start time and resource use
+  - parent and child process relationships
+  - active/listening sockets owned by the process
+  - open files
+  - best-effort mapping to its systemd service
+  - related `journalctl` entries by PID and systemd unit
+  - SHA-256 hashing of the executable
+  - lightweight investigation cues such as deleted executables, execution from `/tmp`/`/dev/shm`, active remote connections, root context, and network utilities in command lines
+  - JSON investigation snapshot export
+- Network interface counters and system-wide socket view
+- Double-click a socket to investigate its owning PID
+- Double-click a service to pivot to its `MainPID`
 - Disk usage and disk I/O statistics
 - systemd service overview
 - journalctl viewer with severity and text filters
 - Basic security checks for listening ports, SSH configuration, SELinux/AppArmor, sudo configuration, and firewall tooling
-- Export a point-in-time system report to JSON or HTML
-- Automatic refresh with a configurable interval
+- Export point-in-time system reports to JSON or HTML
+- Automatic refresh
 - No agent, database, or cloud account required
 
-## Planned
-
-- Deeper process → sockets → files → logs investigation links
-- Historical graphs and short-term local sampling
-- systemd timer inspection
-- Better temperature and hardware sensor support
-- PDF report export
-- AppImage, `.deb`, and `.rpm` packaging
-- Alert thresholds and saved investigation snapshots
+The investigation cues are **context, not verdicts**. For example, a root process or a process using `curl` is not automatically malicious.
 
 ## Requirements
 
@@ -48,7 +56,7 @@ sensors
 ip
 ```
 
-On Debian/Ubuntu:
+On Debian/Ubuntu/Kali:
 
 ```bash
 sudo apt update
@@ -82,11 +90,62 @@ chmod +x install.sh run.sh
 ./run.sh
 ```
 
+## Investigation workflow
+
+A practical workflow is:
+
+```text
+Processes / Network / Services
+          ↓
+      choose a PID
+          ↓
+       Investigate
+          ↓
+ identity + parent/children
+          ↓
+ sockets ↔ files ↔ systemd ↔ journal
+          ↓
+ hash executable / export snapshot
+```
+
+### From Processes
+
+Open **Processes**, select a row, and click **Investigate selected** or double-click the process.
+
+### From Network
+
+Open **Network** and double-click a socket. If the owning PID is visible, the app pivots directly into that process investigation.
+
+### From Services
+
+Open **Services** and double-click a service. The app asks systemd for its `MainPID` and pivots to that process when it is running.
+
+### Inside Investigate
+
+The Investigation tab contains:
+
+- **Process identity & pivots** — PID/PPID, user, command, executable, CWD, start time, memory, systemd unit, and context cues
+- **Relationships** — parent, selected process, and direct children; double-click another PID to pivot again
+- **Sockets** — local/remote endpoints and connection state
+- **Open Files** — files currently held by the process where permissions allow
+- **Related Logs** — recent journald entries correlated using `_PID=<pid>` and the detected service unit
+- **systemd** — service state, `ExecStart`, unit file, user/group, restart policy, memory/tasks and other useful properties
+
+Use **SHA-256 executable** to hash the executable on disk without running or modifying it. Use **Export snapshot** to save the gathered investigation data as JSON.
+
+More details are in [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md).
+
 ## Permissions
 
-The app is designed to work without root. Some process details, sockets, logs, and security settings may be hidden by normal Linux permissions.
+The app is designed to work as your normal user. Linux intentionally restricts visibility into some other users' processes, file descriptors, sockets, and logs.
 
-Run it as your normal user first. Only use elevated privileges when you specifically need data your account cannot read:
+Start normally:
+
+```bash
+./run.sh
+```
+
+Only when a lab or investigation genuinely requires broader visibility, you can run:
 
 ```bash
 sudo .venv/bin/python3 linux_monitor.py
@@ -94,27 +153,33 @@ sudo .venv/bin/python3 linux_monitor.py
 
 Do not make running the whole GUI as root your default workflow.
 
+If a socket has no visible PID or a process shows fewer files/logs than expected, that may simply be a permissions boundary rather than missing data.
+
 ## Tabs
 
 ### Overview
 
-Shows live system health: CPU, RAM, swap, filesystem usage, network throughput, load, uptime, host information, and per-core utilization.
+Live CPU, RAM, swap, filesystem usage, network throughput, load, uptime, host information, and per-core utilization.
 
 ### Processes
 
-Filter running processes and double-click a row for a detailed view of the selected PID, including command line, executable path, open files, and connections where permissions allow.
+Filter running processes by PID, PPID, user, name, or command. Double-click a process to pivot into Investigate.
+
+### Investigate
+
+Cross-links one selected PID to process relationships, sockets, open files, systemd context, journald events, executable hashing, and an exportable investigation snapshot.
 
 ### Network
 
-Shows interface counters and active TCP/UDP sockets. Useful for answering questions such as “which process owns this connection?”
+Shows interface counters and active TCP/UDP sockets. Double-click a socket to investigate the owning process.
 
 ### Disks
 
-Shows mounted filesystems plus read/write counters and I/O activity.
+Mounted filesystems plus read/write counters and I/O activity.
 
 ### Services
 
-Reads `systemctl` and lists service state. Failed services are easy to spot.
+Reads `systemctl` and lists service state. Double-click a service to investigate its current `MainPID`.
 
 ### Logs
 
@@ -122,40 +187,59 @@ Reads recent `journalctl` entries and supports text/priority filtering.
 
 ### Security
 
-Performs non-destructive checks for listening ports, firewall tooling, SSH configuration, SELinux/AppArmor, and sudo policy locations.
+Non-destructive checks for listening ports, firewall tooling, SSH configuration, SELinux/AppArmor, and sudo policy locations.
 
 ## Exporting reports
 
-Use **File → Export JSON** or **File → Export HTML**. Reports are snapshots; they do not contain a continuous history of everything the machine has done.
+Use **File → Export system JSON** or **File → Export system HTML** for a system snapshot.
 
-Be careful before sharing exported reports. Hostnames, usernames, IP addresses, process command lines, and other environment information can be sensitive.
+For a focused process investigation, use **Investigate → Export snapshot** or **File → Export investigation JSON**.
+
+Exports can contain hostnames, usernames, IP addresses, file paths, command lines, and logs. Review them before sharing.
+
+## Security model
+
+This tool does not kill processes, modify services, edit files, change firewall rules, or execute remediation commands. The current application is an inspection tool.
+
+The program may read command lines, open-file paths, network endpoints, service metadata, and logs that are already visible to the account running it. Treat exported data as potentially sensitive.
+
+## Planned
+
+- Historical graphs and short-term local sampling
+- Full process ancestry tree and descendant graph
+- Better `/proc/<pid>/fd` inspection and deleted-file visibility
+- systemd timer inspection
+- Better temperature and hardware sensor support
+- Saved investigation history and diffing
+- Alert thresholds
+- PDF report export
+- AppImage, `.deb`, and `.rpm` packaging
 
 ## Design goals
 
 - Low idle overhead
 - Read-only by default
+- Analyst-friendly pivots instead of disconnected metrics
 - Clear explanations instead of unexplained numbers
 - Useful on a workstation, server VM, or incident-response lab
 - Graceful fallback when an optional Linux command is unavailable
 
-The long-term performance target is below roughly 2% CPU while idle and below roughly 100 MB RAM for the packaged application. The Python/Tkinter MVP is a development baseline; measure on your target distro rather than assuming those numbers are guaranteed.
+The long-term performance target is below roughly 2% CPU while idle and below roughly 100 MB RAM for the packaged application. The Python/Tkinter version is a development baseline; measure on the target distro rather than assuming those figures are guaranteed.
 
 ## Project structure
 
 ```text
 Linux-Monitoring/
-├── linux_monitor.py     # Desktop application
-├── requirements.txt     # Python dependencies
-├── install.sh           # Creates venv and installs dependencies
-├── run.sh               # Starts the application
+├── linux_monitor.py          # Desktop application
+├── requirements.txt          # Python dependencies
+├── install.sh                # Creates venv and installs dependencies
+├── run.sh                    # Starts the application
+├── docs/
+│   └── INVESTIGATION.md      # Investigation workflow and field guide
 ├── .gitignore
 ├── LICENSE
 └── README.md
 ```
-
-## Security model
-
-This tool does not execute remediation actions, kill processes, edit configuration files, or modify firewall rules. The current MVP is an inspection tool. Any future action-oriented feature should require explicit confirmation and clearly show the command/change before execution.
 
 ## License
 
